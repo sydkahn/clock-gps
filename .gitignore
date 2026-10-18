@@ -39,3 +39,6 @@ dist/
 
 # Device-side runtime state (never commit generated state)
 device/state.json
+
+# Local ESP32 flash backups
+backups/
