@@ -1,6 +1,41 @@
+# Secrets -----------------------------------------------------------------
+# Real credentials must never be committed. Only the example file below
+# is allowed in the repository.
 credentials.py
 **/credentials.py
+!credentials.example.py
+!**/credentials.example.py
+
+# Environment files
 .env
 .env.*
+
+# Python ------------------------------------------------------------------
 __pycache__/
 *.py[cod]
+*.egg-info/
+.python-version
+
+# Test and coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+
+# Editors and operating system clutter
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
+
+# MicroPython / ESP32 tooling artifacts
+.micropython/
+.mpy-cross/
+build/
+dist/
+
+# Device-side runtime state (never commit generated state)
+device/state.json
