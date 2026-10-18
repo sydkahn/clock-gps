@@ -3,6 +3,129 @@
 All notable changes to Clock GPS are recorded here. The project follows the
 phased plan in `SPECIFICATION.md`.
 
+## [0.4.0] - Phase 6: application integration
+
+### Added
+
+- `device/main.py` now runs the application instead of stopping at a startup
+  banner. It loads and validates configuration and credentials, connects
+  Wi-Fi through `connectivity.wifi`, synchronizes time through
+  `clock.time_service`, initializes the BME280 (SDA GPIO 16, SCL GPIO 17,
+  address `0x76`) through the sensor manager, and then reads and reports the
+  weather on a configurable interval (`telemetry_interval_s`).
+- Each reading cycle prints temperature in °F, relative humidity, station
+  pressure and estimated sea-level pressure in inHg (clearly marked an
+  estimate), and the pressure-trend status. Failures are reported explicitly;
+  a failed sensor, Wi-Fi connection, or NTP sync does not stop the loop, and
+  retries are rate-limited (Wi-Fi/NTP backoff, NTP resync at `ntp_interval_s`).
+  Ctrl-C stops the loop cleanly, and the existing pressure-history
+  persistence is preserved.
+- `tests/test_main.py`: mocked integration tests covering startup wiring,
+  periodic reads, sensor/Wi-Fi/NTP failure isolation, retry pacing, trend
+  computation across the window, Ctrl-C shutdown, and that the Wi-Fi SSID and
+  password are never printed.
+
+### Changed
+
+- Renamed the `device/network/` package to `device/connectivity/` and updated
+  imports, tests, and documentation. On the ESP32 the MicroPython built-in
+  `network` module is non-extensible, so it always shadows a filesystem
+  package of the same name; `import network.wifi` therefore failed on the
+  device even though it worked in host tests. `WifiManager` still imports the
+  built-in `network` module (lazily) for the radio itself, so Wi-Fi behavior is
+  unchanged. This layout adjustment is permitted by `SPECIFICATION.md` §4.2.
+- `device/version.py` bumped to `0.4.0`.
+
+### Notes
+
+- MQTT, a display, GPS, and power management remain unimplemented and are not
+  wired in.
+- `SPECIFICATION.md` is unchanged; the `network/` → `connectivity/` layout
+  adjustment is permitted by §4.2.
+- No firmware was flashed and the ESP32 was not modified by this project.
+
+## [0.3.0] - Phase 6 (partial): BME280 weather sensor
+
+### Added
+
+- `device/sensors/bme280.py`: BME280 temperature/pressure/humidity driver over
+  I2C (SDA GPIO 16, SCL GPIO 17, address `0x76` with `0x77` accepted as an
+  alternative). Verifies the chip-id register (`0x60`) before use, loads the
+  calibration blocks, and uses the Bosch integer compensation routines. The
+  MicroPython `machine` module is imported lazily so the module stays
+  host-testable, and an I2C bus can be injected for tests.
+- `device/sensors/weather.py`: `WeatherSensor` (a `Sensor`) plus pure,
+  testable helpers and small classes:
+  - Celsius→Fahrenheit, hPa/inHg, and Pascal→inHg conversions;
+  - sea-level pressure estimation from station pressure, station temperature,
+    and configured elevation (returned with `sea_level_estimated: True`);
+  - `TrendTracker` for the ~3-hour station-pressure trend
+    (`rising` / `falling` / `steady` / `waiting_for_history`), which discards
+    corrupt, out-of-range, duplicate, non-monotonic, stale, and future
+    samples and never invents a trend or substitutes zero for missing data;
+  - `PressureHistoryStore`, a versioned JSON history persisted across
+    restarts with rate-limited writes to spare the flash.
+- Configuration (`device/config.py`): `elevation_ft` (default `627` feet),
+  `pressure_trend_window_s` (default `10800` seconds), and
+  `pressure_trend_threshold_hpa` (default `1.0` hPa), with validation and
+  backward-compatible defaults.
+- Tests (standard library only): `tests/test_bme280.py` (calibration parsing,
+  compensation, and I2C error handling with a fake bus) and
+  `tests/test_weather.py` (conversions, sea-level estimation, trend cases,
+  history persistence/corruption/restart recovery, clock handling, malformed
+  readings, and `SensorManager` compatibility). `tests/test_config.py`
+  extended for the new settings.
+
+### Changed
+
+- `device/version.py` bumped to `0.3.0`.
+- `docs/HARDWARE.md` and `README.md` identify the weather sensor as a BME280
+  and document units and the unvalidated sea-level estimate.
+
+### Notes
+
+- `SPECIFICATION.md` is unchanged; the former "380 weather chip" question is
+  resolved as a BME280 without editing the specification.
+- Station pressure and estimated sea-level pressure are reported under
+  separate keys and are never substituted for one another.
+- The estimated sea-level pressure has **not** been validated against an
+  independent weather observation.
+- The sensor is not yet wired into `main.py`.
+- No firmware was flashed and the ESP32 was not modified by this project.
+
+## [0.2.0] - Phase 3: Wi-Fi and NTP modules
+
+### Added
+
+- `device/clock/time_service.py`: explicit MicroPython (2000) to Unix (1970)
+  epoch conversion (`micropython_to_unix`, `unix_to_micropython`) with a
+  plausibility guard, plus an NTP synchronization interface
+  (`TimeService.sync_ntp`). Tracks validity, source, last successful sync,
+  and a secret-free last-attempt status. Hardware imports are lazy so the
+  module stays host-testable.
+- `device/network/wifi.py` (renamed to `device/connectivity/wifi.py` in
+  [0.4.0]): `WifiManager` connects the station interface
+  using credentials from `config.py`, handles timeouts and exceptions
+  without crashing, never prints or stores passwords in status, and imports
+  the MicroPython `network` module lazily.
+- Tests (standard library only): `tests/test_time_service.py` extended with
+  epoch-conversion and NTP success/failure cases; new `tests/test_wifi.py`
+  covering successful connection, timeout, exception handling, and
+  password-free status using fakes.
+- Documentation: README configuration and timekeeping sections;
+  `docs/INSTALLATION.md` testing and epoch notes; `docs/HARDWARE.md`
+  confirmed firmware/epoch.
+
+### Changed
+
+- `device/version.py` bumped to `0.2.0`.
+
+### Notes
+
+- The Wi-Fi and NTP modules are ready but not yet wired into `main.py`.
+- MQTT, GPS, OTA, sensors, and power management remain unimplemented.
+- No firmware was flashed and the ESP32 was not modified by this project.
+
 ## [0.1.0] - Phase 1: repository and safe foundation
 
 ### Added

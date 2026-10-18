@@ -125,5 +125,33 @@ class LoadTests(unittest.TestCase):
                 sys.modules["credentials"] = saved
 
 
+class WeatherConfigTests(unittest.TestCase):
+    def test_weather_defaults_are_valid(self):
+        app_config = config.Config()
+        self.assertEqual(627, app_config.elevation_ft)
+        self.assertEqual(10800, app_config.pressure_trend_window_s)
+        self.assertEqual(1.0, app_config.pressure_trend_threshold_hpa)
+        self.assertEqual([], app_config.validate())
+
+    def test_elevation_out_of_range_is_reported(self):
+        problems = config.Config(elevation_ft=40000).validate()
+        self.assertTrue(any("elevation_ft" in p for p in problems))
+
+    def test_elevation_non_numeric_is_reported(self):
+        problems = config.Config(elevation_ft="high").validate()
+        self.assertTrue(any("elevation_ft" in p for p in problems))
+
+    def test_below_sea_level_elevation_is_allowed(self):
+        self.assertEqual([], config.Config(elevation_ft=-200).validate())
+
+    def test_non_positive_threshold_is_reported(self):
+        problems = config.Config(pressure_trend_threshold_hpa=0).validate()
+        self.assertTrue(any("threshold" in p for p in problems))
+
+    def test_too_small_trend_window_is_reported(self):
+        problems = config.Config(pressure_trend_window_s=60).validate()
+        self.assertTrue(any("pressure_trend_window_s" in p for p in problems))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -23,11 +23,21 @@ DEFAULT_TELEMETRY_INTERVAL_S = 300
 DEFAULT_MQTT_PORT = 1883
 DEFAULT_LOG_LEVEL = "info"
 
+# Weather sensor defaults.
+DEFAULT_ELEVATION_FT = 627
+DEFAULT_PRESSURE_TREND_WINDOW_S = 10800  # approximately three hours
+DEFAULT_PRESSURE_TREND_THRESHOLD_HPA = 1.0
+
 # Characters allowed in a device id; the id appears in MQTT topics.
 DEVICE_ID_ALLOWED = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
 
 # Guard against accidental busy loops by rejecting very small intervals.
 MIN_INTERVAL_S = 5
+
+# Bounds for the weather/sea-level configuration.
+MIN_ELEVATION_FT = -1500
+MAX_ELEVATION_FT = 30000
+MIN_TREND_WINDOW_S = 1800
 
 
 class ConfigurationError(Exception):
@@ -68,6 +78,43 @@ def _check_interval(name, value):
         return ["%s must be an integer" % name]
     if number < MIN_INTERVAL_S:
         return ["%s must be at least %d seconds" % (name, MIN_INTERVAL_S)]
+    return []
+
+
+def _check_elevation_ft(value):
+    """Return a list of problems for the configured ground elevation."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ["elevation_ft must be a number"]
+    if number != number:  # NaN
+        return ["elevation_ft must be a number"]
+    if not (MIN_ELEVATION_FT <= number <= MAX_ELEVATION_FT):
+        return ["elevation_ft must be between %d and %d"
+                % (MIN_ELEVATION_FT, MAX_ELEVATION_FT)]
+    return []
+
+
+def _check_positive_number(name, value):
+    """Return a list of problems for a value that must be > 0."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ["%s must be a number" % name]
+    if number != number or number <= 0:  # NaN or non-positive
+        return ["%s must be greater than zero" % name]
+    return []
+
+
+def _check_trend_window(value):
+    """Return a list of problems for the pressure-trend window."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return ["pressure_trend_window_s must be an integer"]
+    if number < MIN_TREND_WINDOW_S:
+        return ["pressure_trend_window_s must be at least %d seconds"
+                % MIN_TREND_WINDOW_S]
     return []
 
 
@@ -135,7 +182,10 @@ class Config:
                  ntp_interval_s=DEFAULT_NTP_INTERVAL_S,
                  ntp_timeout_s=DEFAULT_NTP_TIMEOUT_S,
                  telemetry_interval_s=DEFAULT_TELEMETRY_INTERVAL_S,
-                 log_level=DEFAULT_LOG_LEVEL):
+                 log_level=DEFAULT_LOG_LEVEL,
+                 elevation_ft=DEFAULT_ELEVATION_FT,
+                 pressure_trend_window_s=DEFAULT_PRESSURE_TREND_WINDOW_S,
+                 pressure_trend_threshold_hpa=DEFAULT_PRESSURE_TREND_THRESHOLD_HPA):
         self.device_id = device_id
         self.topic_prefix = topic_prefix
         self.ntp_host = ntp_host
@@ -143,6 +193,10 @@ class Config:
         self.ntp_timeout_s = ntp_timeout_s
         self.telemetry_interval_s = telemetry_interval_s
         self.log_level = log_level
+        # Weather / sea-level settings (ground elevation in feet).
+        self.elevation_ft = elevation_ft
+        self.pressure_trend_window_s = pressure_trend_window_s
+        self.pressure_trend_threshold_hpa = pressure_trend_threshold_hpa
         # Attached by load(); kept separate from non-secret configuration.
         self.credentials = None
 
@@ -159,6 +213,10 @@ class Config:
         problems.extend(_check_interval("ntp_interval_s", self.ntp_interval_s))
         problems.extend(_check_interval("ntp_timeout_s", self.ntp_timeout_s))
         problems.extend(_check_interval("telemetry_interval_s", self.telemetry_interval_s))
+        problems.extend(_check_elevation_ft(self.elevation_ft))
+        problems.extend(_check_trend_window(self.pressure_trend_window_s))
+        problems.extend(_check_positive_number("pressure_trend_threshold_hpa",
+                                               self.pressure_trend_threshold_hpa))
         return problems
 
     def is_valid(self):
