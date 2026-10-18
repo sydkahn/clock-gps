@@ -42,3 +42,6 @@ device/state.json
 
 # Local ESP32 flash backups
 backups/
+
+# Downloaded firmware binaries
+firmware/
