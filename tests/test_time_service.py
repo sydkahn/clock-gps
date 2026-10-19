@@ -4,6 +4,7 @@ Covers the MicroPython 2000-epoch conversion, NTP synchronization success and
 failure handling, and time/source tracking. No hardware is required.
 """
 
+import calendar
 import datetime
 import unittest
 
@@ -13,6 +14,7 @@ from clock.time_service import (
     SOURCE_NTP,
     UNIX_EPOCH_OFFSET_S,
     TimeService,
+    format_timestamp,
     is_plausible,
     micropython_to_unix,
     unix_to_micropython,
@@ -93,6 +95,58 @@ class EpochConversionTests(unittest.TestCase):
         service.set_micropython_time(SYNCED_MP)
         self.assertEqual(SYNCED_UNIX, service.now())
         self.assertEqual(SOURCE_NTP, service.source)
+
+
+class FormatTimestampTests(unittest.TestCase):
+    def test_none_returns_none(self):
+        self.assertIsNone(format_timestamp(None))
+
+    def test_morning(self):
+        secs = calendar.timegm((2026, 10, 18, 9, 5, 0, 0, 0, 0))
+        self.assertEqual("2026-10-18 09:05:00 AM", format_timestamp(secs))
+
+    def test_afternoon(self):
+        secs = calendar.timegm((2026, 10, 18, 15, 30, 0, 0, 0, 0))
+        self.assertEqual("2026-10-18 03:30:00 PM", format_timestamp(secs))
+
+    def test_midnight_is_twelve_am(self):
+        secs = calendar.timegm((2026, 10, 18, 0, 0, 0, 0, 0, 0))
+        self.assertEqual("2026-10-18 12:00:00 AM", format_timestamp(secs))
+
+    def test_noon_is_twelve_pm(self):
+        secs = calendar.timegm((2026, 10, 18, 12, 0, 0, 0, 0, 0))
+        self.assertEqual("2026-10-18 12:00:00 PM", format_timestamp(secs))
+
+    def test_evening_pads_hour(self):
+        secs = calendar.timegm((2026, 10, 18, 23, 45, 6, 0, 0, 0))
+        self.assertEqual("2026-10-18 11:45:06 PM", format_timestamp(secs))
+
+    def test_utc_to_local_offset_can_change_the_day(self):
+        # 02:00 UTC on the 18th is 21:00 on the 17th at UTC-5.
+        secs = calendar.timegm((2026, 10, 18, 2, 0, 0, 0, 0, 0))
+        self.assertEqual("2026-10-17 09:00:00 PM",
+                         format_timestamp(secs, offset_hours=-5))
+
+    def test_positive_offset(self):
+        secs = calendar.timegm((2026, 10, 18, 23, 30, 0, 0, 0, 0))
+        self.assertEqual("2026-10-19 08:30:00 AM",
+                         format_timestamp(secs, offset_hours=9))
+
+    def test_fractional_offset(self):
+        secs = calendar.timegm((2026, 10, 18, 6, 0, 0, 0, 0, 0))
+        self.assertEqual("2026-10-18 11:30:00 AM",
+                         format_timestamp(secs, offset_hours=5.5))
+
+    def test_offset_is_applied_to_the_instant_passed_to_gmtime(self):
+        seen = []
+
+        def gmtime(secs):
+            seen.append(secs)
+            return (2026, 10, 18, 14, 3, 12, 0, 0)
+
+        result = format_timestamp(1000, offset_hours=-5, gmtime=gmtime)
+        self.assertEqual([1000 - 5 * 3600], seen)
+        self.assertEqual("2026-10-18 02:03:12 PM", result)
 
 
 class FakeTimeModule:

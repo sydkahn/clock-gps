@@ -132,8 +132,40 @@ class FakeDriver:
         }
 
 
+class FakeDashboard:
+    """Stand-in for connectivity.dashboard.Dashboard."""
+
+    def __init__(self, enabled=True, refresh_results=None):
+        self._enabled = enabled
+        self._refresh_results = list(refresh_results or [])
+        self.start_calls = 0
+        self.stop_calls = 0
+        self.updates = []
+        self.waits = []
+
+    def start(self):
+        self.start_calls += 1
+        return self._enabled
+
+    def stop(self):
+        self.stop_calls += 1
+
+    @property
+    def enabled(self):
+        return self._enabled
+
+    def update(self, records):
+        self.updates.append(records)
+
+    def service_until(self, deadline):
+        self.waits.append(deadline)
+        if self._refresh_results:
+            return self._refresh_results.pop(0)
+        return False
+
+
 def make_app(time_service=None, wifi=None, driver=None, clock=None, sleep=None,
-             config_obj=None, interval_s=None, **kwargs):
+             config_obj=None, interval_s=None, dashboard=None, **kwargs):
     """Build an app with a single weather sensor using *driver*."""
     if config_obj is None:
         config_obj = config.Config()
@@ -141,12 +173,14 @@ def make_app(time_service=None, wifi=None, driver=None, clock=None, sleep=None,
         wifi = FakeWifi()
     if clock is None:
         clock = FakeClock()
+    if dashboard is None:
+        dashboard = FakeDashboard(enabled=False)
     manager = SensorManager(time_service=time_service)
     manager.register(WeatherSensor(config=config_obj, driver=driver,
                                    time_service=time_service))
     app = main.ClockGpsApp(config_obj, wifi=wifi, time_service=time_service,
                            sensor_manager=manager, clock=clock, sleep=sleep,
-                           interval_s=interval_s, **kwargs)
+                           interval_s=interval_s, dashboard=dashboard, **kwargs)
     return app, manager
 
 
@@ -466,6 +500,137 @@ class WifiManagerIntegrationTests(unittest.TestCase):
         self.assertIn("10.0.0.203", text)
         self.assertNotIn("hunter2", text)
         self.assertNotIn("MyNetwork", text)
+
+
+class DashboardWiringTests(unittest.TestCase):
+    def test_setup_starts_the_dashboard(self):
+        time_service, _ = make_time_service(ok=True)
+        dash = FakeDashboard(enabled=True)
+        app, _ = make_app(time_service=time_service, wifi=FakeWifi(),
+                          driver=FakeDriver(), dashboard=dash)
+        with redirect_stdout(io.StringIO()):
+            app.setup()
+        self.assertEqual(1, dash.start_calls)
+
+    def test_run_once_hands_records_to_the_dashboard(self):
+        time_service, _ = make_time_service(ok=True)
+        dash = FakeDashboard(enabled=True)
+        app, _ = make_app(time_service=time_service, wifi=FakeWifi(),
+                          driver=FakeDriver(), dashboard=dash)
+        with redirect_stdout(io.StringIO()):
+            app.setup()
+            records = app.run_once()
+        self.assertEqual(1, len(dash.updates))
+        self.assertIs(dash.updates[0], records)
+
+    def test_disabled_dashboard_uses_plain_sleep(self):
+        time_service, _ = make_time_service(ok=True)
+        dash = FakeDashboard(enabled=False)
+        sleep_calls = []
+
+        def sleep(seconds):
+            sleep_calls.append(seconds)
+            raise KeyboardInterrupt
+
+        app, _ = make_app(time_service=time_service, wifi=FakeWifi(),
+                          driver=FakeDriver(), dashboard=dash, sleep=sleep)
+        with redirect_stdout(io.StringIO()):
+            app.run()
+        self.assertEqual([300], sleep_calls)
+        self.assertEqual([], dash.waits)          # never serviced
+        self.assertEqual(1, dash.stop_calls)
+
+    def test_enabled_dashboard_is_serviced_during_the_wait(self):
+        time_service, _ = make_time_service(ok=True)
+        dash = FakeDashboard(enabled=True)
+        clock = FakeClock()
+        sleep_calls = []
+
+        def sleep(seconds):
+            sleep_calls.append(seconds)
+            clock.advance(seconds)
+
+        app, _ = make_app(time_service=time_service, wifi=FakeWifi(),
+                          driver=FakeDriver(), dashboard=dash, clock=clock,
+                          sleep=sleep)
+        with redirect_stdout(io.StringIO()):
+            app.setup()
+            app._wait(300)
+        self.assertEqual(1, len(dash.waits))
+        # service_until returned False without consuming the interval, so the
+        # loop fell back to a sleep of the remaining time.
+        self.assertEqual([300], sleep_calls)
+
+    def test_refresh_request_triggers_one_reading_and_restarts_interval(self):
+        time_service, _ = make_time_service(ok=True)
+        driver = FakeDriver()
+        dash = FakeDashboard(enabled=True, refresh_results=[True])
+        clock = FakeClock()
+
+        def sleep(seconds):
+            clock.advance(seconds)
+
+        app, _ = make_app(time_service=time_service, wifi=FakeWifi(),
+                          driver=driver, dashboard=dash, clock=clock,
+                          sleep=sleep)
+        with redirect_stdout(io.StringIO()):
+            app.setup()
+            app._wait(300)
+        # Exactly one extra reading, taken by the app loop, not the handler.
+        self.assertEqual(1, driver.read_calls)
+        self.assertEqual(1, len(dash.updates))
+
+    def test_default_dashboard_uses_configuration(self):
+        app = main.ClockGpsApp(config.Config(web_port=8080, web_enabled=True),
+                               wifi=FakeWifi(), time_service=TimeService(),
+                               clock=FakeClock())
+        self.assertEqual(8080, app._dashboard.port)
+
+    def test_disabled_config_leaves_dashboard_inactive(self):
+        app = main.ClockGpsApp(config.Config(web_enabled=False),
+                               wifi=FakeWifi(), time_service=TimeService(),
+                               clock=FakeClock())
+        self.assertFalse(app._dashboard.enabled)
+
+
+class TimestampTests(unittest.TestCase):
+    # SYNCED_UNIX is 2023-11-14T22:13:20Z.
+    def test_reading_line_uses_twelve_hour_local_time(self):
+        time_service, _ = make_time_service(ok=True)
+        app, _ = make_app(time_service=time_service, wifi=FakeWifi(),
+                          driver=FakeDriver())
+        output = io.StringIO()
+        with redirect_stdout(output):
+            app.setup()
+            app.run_once()
+        # Default offset is -5 (Eastern Standard), so 22:13:20Z is 5:13:20 PM.
+        self.assertTrue(
+            any(line.startswith("[clock-gps] 2023-11-14 05:13:20 PM | temp")
+                for line in output.getvalue().splitlines()),
+            output.getvalue())
+
+    def test_configured_offset_applies_to_the_display(self):
+        time_service, _ = make_time_service(ok=True)
+        app, _ = make_app(time_service=time_service, wifi=FakeWifi(),
+                          driver=FakeDriver(),
+                          config_obj=config.Config(utc_offset_hours=0))
+        output = io.StringIO()
+        with redirect_stdout(output):
+            app.setup()
+            app.run_once()
+        self.assertIn("[clock-gps] 2023-11-14 10:13:20 PM | temp",
+                      output.getvalue())
+
+    def test_unsynchronized_clock_shows_time_not_set(self):
+        time_service, _ = make_time_service(ok=False)
+        app, _ = make_app(time_service=time_service, wifi=FakeWifi(),
+                          driver=FakeDriver())
+        output = io.StringIO()
+        with redirect_stdout(output):
+            app.setup()
+            app.run_once()
+        self.assertIn("[clock-gps] TIME NOT SET | temp", output.getvalue())
+        self.assertNotIn("1970-01-01", output.getvalue())
 
 
 if __name__ == "__main__":

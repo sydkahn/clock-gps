@@ -3,6 +3,67 @@
 All notable changes to Clock GPS are recorded here. The project follows the
 phased plan in `SPECIFICATION.md`.
 
+## [0.5.0] - Phase 6: read-only web dashboard
+
+### Added
+
+- `device/connectivity/dashboard.py`: a lightweight, read-only HTTP server
+  using MicroPython's built-in `socket`/`select` (imported lazily so the module
+  stays host-testable). It serves a single self-contained page (`GET /`), a
+  JSON status endpoint (`GET /status.json`), a rate-limited refresh request
+  (`POST /api/refresh`), and an empty `204` for `GET /favicon.ico`; anything
+  else is a `400`/`404`/`405`. The page shows the pressure **trend** as the
+  prominent element, temperature in °F, humidity, the last reading time, and
+  Wi-Fi/sensor status. Absolute pressure is excluded from both the page and the
+  JSON by a field whitelist, and no credentials are exposed.
+- `device/clock/time_service.py`: `format_timestamp`, a small, injectable
+  helper that formats Unix-epoch seconds as a local 12-hour
+  `YYYY-MM-DD hh:mm:ss AM/PM` string, applying a display-only UTC offset and
+  returning `None` when no time is set.
+- Configuration (`device/config.py`): `web_enabled` (default `True`),
+  `web_port` (default `80`), `web_refresh_min_s` (default `10`), and
+  `utc_offset_hours` (display-only local UTC offset in hours, default `-5` for
+  Eastern Standard Time), with validation and backward-compatible defaults.
+- Tests: `tests/test_dashboard.py` (request parsing/routing, response
+  formatting, the pressure-free JSON whitelist, the reading timestamp, and the
+  cooperative serving loop with fakes); `tests/test_time_service.py` extended
+  for `format_timestamp` (morning, afternoon, noon, midnight, and UTC-to-local
+  conversion); `tests/test_config.py` extended for the web and offset settings;
+  `tests/test_main.py` extended for dashboard wiring, 12-hour timestamped
+  readings, and the refresh/schedule interaction.
+
+### Changed
+
+- `device/main.py`: console readings are prefixed with the reading's local time
+  (12-hour, with AM/PM) computed from the NTP-synchronized clock and the
+  configured `utc_offset_hours`, or `TIME NOT SET` when the clock is not
+  synchronized (no timestamp is invented). The reading loop now starts the
+  dashboard, hands it each reading after it is taken (`update`), and services
+  requests during the wait between readings (`_wait`). A refresh request is
+  queued to the loop, which takes the reading through the normal path and
+  restarts the interval; the dashboard never reads a sensor or creates a second
+  reading loop. If the dashboard is disabled or cannot start, `_wait` falls
+  back to the previous plain sleep, preserving existing behavior.
+- `device/version.py` bumped to `0.5.0`.
+
+### Notes
+
+- `/status.json` reports the current server time and the last reading's time as
+  separate fields, so server time is never presented as reading time. Both the
+  console and `last_reading_local` use the same 12-hour local formatting.
+- Only the *displayed* time is shifted by `utc_offset_hours`; stored and
+  published timestamps remain Unix-epoch seconds in UTC. The offset is a fixed
+  number and does not follow daylight saving.
+- The dashboard is a LAN-local presentation interface bound to `0.0.0.0` on
+  port `80`; it must not be exposed to the public internet. MQTT remains the
+  only home-automation interface (`SPECIFICATION.md` §8.1), which has no
+  dashboard section; this feature is a presentation addition, not a
+  home-automation interface, and `SPECIFICATION.md` is unchanged.
+- `select.poll()`, socket timeouts, one request per connection, and a bounded
+  request read keep the server from blocking the reading schedule.
+- No firmware was flashed, nothing was deployed to the ESP32, and the physical
+  device was not modified by this project.
+
 ## [0.4.0] - Phase 6: application integration
 
 ### Added

@@ -23,6 +23,24 @@ DEFAULT_TELEMETRY_INTERVAL_S = 300
 DEFAULT_MQTT_PORT = 1883
 DEFAULT_LOG_LEVEL = "info"
 
+# Read-only web dashboard defaults (Phase 6 presentation interface).
+DEFAULT_WEB_ENABLED = True
+DEFAULT_WEB_PORT = 80
+DEFAULT_WEB_REFRESH_MIN_S = 10
+
+# Local UTC offset (whole or fractional hours) used only to *display* times;
+# stored timestamps remain UTC. Fixed offset: it does not follow daylight
+# saving, so it must be changed by hand when the local DST rule changes.
+DEFAULT_UTC_OFFSET_HOURS = -5  # Eastern Standard Time
+
+# Bounds for the display UTC offset.
+MIN_UTC_OFFSET_HOURS = -12
+MAX_UTC_OFFSET_HOURS = 14
+
+# Bounds for the dashboard's TCP port.
+MIN_WEB_PORT = 1
+MAX_WEB_PORT = 65535
+
 # Weather sensor defaults.
 DEFAULT_ELEVATION_FT = 627
 DEFAULT_PRESSURE_TREND_WINDOW_S = 10800  # approximately three hours
@@ -118,6 +136,39 @@ def _check_trend_window(value):
     return []
 
 
+def _check_bool(name, value):
+    """Return a list of problems for a setting that must be true or false."""
+    if not isinstance(value, bool):
+        return ["%s must be true or false" % name]
+    return []
+
+
+def _check_web_port(value):
+    """Return a list of problems for the dashboard TCP port."""
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return ["web_port must be an integer"]
+    if not (MIN_WEB_PORT <= port <= MAX_WEB_PORT):
+        return ["web_port must be between %d and %d"
+                % (MIN_WEB_PORT, MAX_WEB_PORT)]
+    return []
+
+
+def _check_utc_offset(value):
+    """Return a list of problems for the display UTC offset in hours."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ["utc_offset_hours must be a number"]
+    if number != number:  # NaN
+        return ["utc_offset_hours must be a number"]
+    if not (MIN_UTC_OFFSET_HOURS <= number <= MAX_UTC_OFFSET_HOURS):
+        return ["utc_offset_hours must be between %d and %d hours"
+                % (MIN_UTC_OFFSET_HOURS, MAX_UTC_OFFSET_HOURS)]
+    return []
+
+
 class Credentials:
     """Credentials loaded from the local, git-ignored secrets module."""
 
@@ -185,7 +236,11 @@ class Config:
                  log_level=DEFAULT_LOG_LEVEL,
                  elevation_ft=DEFAULT_ELEVATION_FT,
                  pressure_trend_window_s=DEFAULT_PRESSURE_TREND_WINDOW_S,
-                 pressure_trend_threshold_hpa=DEFAULT_PRESSURE_TREND_THRESHOLD_HPA):
+                 pressure_trend_threshold_hpa=DEFAULT_PRESSURE_TREND_THRESHOLD_HPA,
+                 web_enabled=DEFAULT_WEB_ENABLED,
+                 web_port=DEFAULT_WEB_PORT,
+                 web_refresh_min_s=DEFAULT_WEB_REFRESH_MIN_S,
+                 utc_offset_hours=DEFAULT_UTC_OFFSET_HOURS):
         self.device_id = device_id
         self.topic_prefix = topic_prefix
         self.ntp_host = ntp_host
@@ -197,6 +252,12 @@ class Config:
         self.elevation_ft = elevation_ft
         self.pressure_trend_window_s = pressure_trend_window_s
         self.pressure_trend_threshold_hpa = pressure_trend_threshold_hpa
+        # Read-only web dashboard settings.
+        self.web_enabled = web_enabled
+        self.web_port = web_port
+        self.web_refresh_min_s = web_refresh_min_s
+        # Display-only local UTC offset; stored timestamps stay UTC.
+        self.utc_offset_hours = utc_offset_hours
         # Attached by load(); kept separate from non-secret configuration.
         self.credentials = None
 
@@ -217,6 +278,10 @@ class Config:
         problems.extend(_check_trend_window(self.pressure_trend_window_s))
         problems.extend(_check_positive_number("pressure_trend_threshold_hpa",
                                                self.pressure_trend_threshold_hpa))
+        problems.extend(_check_bool("web_enabled", self.web_enabled))
+        problems.extend(_check_web_port(self.web_port))
+        problems.extend(_check_interval("web_refresh_min_s", self.web_refresh_min_s))
+        problems.extend(_check_utc_offset(self.utc_offset_hours))
         return problems
 
     def is_valid(self):

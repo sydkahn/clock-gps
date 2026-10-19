@@ -6,4 +6,4 @@ value. It is deliberately independent of the MicroPython firmware version.
 
 APP_NAME = "clock-gps"
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

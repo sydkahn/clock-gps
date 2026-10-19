@@ -5,6 +5,12 @@ connect Wi-Fi, synchronize time through the shared time service, then read
 the BME280 weather sensor through the sensor manager and the weather module
 and report a readable summary on a configurable interval.
 
+A read-only web dashboard (``connectivity.dashboard``) can also serve a small
+status page from the same loop. It is handed each reading after it is taken and
+is serviced during the wait between readings, so it never reads a sensor itself
+and never blocks the reading schedule; a page "refresh" request is queued back
+to this loop rather than triggering a second reading path.
+
 Hardware access stays inside the sensor, connectivity, and time modules; this
 file only coordinates them and never imports ``machine``, ``network``, or
 ``ntptime`` directly, so it can be imported and unit-tested on the
@@ -14,7 +20,8 @@ management are later phases and are deliberately not wired in here.
 
 import config
 import version
-from clock.time_service import TimeService
+from clock.time_service import TimeService, format_timestamp
+from connectivity.dashboard import Dashboard
 from connectivity.wifi import from_config as wifi_from_config
 from sensors.base import STATUS_OK
 from sensors.bme280 import (DEFAULT_ADDRESS as BME280_ADDRESS,
@@ -25,6 +32,9 @@ from sensors.weather import PressureHistoryStore, WeatherSensor
 
 #: Name used by the weather sensor module; the loop reports this record.
 WEATHER_SENSOR_NAME = "weather"
+
+#: Shown in place of a timestamp when the clock is not synchronized.
+TIME_NOT_SET = "TIME NOT SET"
 
 # Retry backoff (seconds) so an unavailable Wi-Fi network or NTP server does
 # not become a rapid retry loop. The reading interval itself comes from
@@ -72,7 +82,8 @@ class ClockGpsApp:
     """Coordinates configuration, connectivity, time, and the sensor loop."""
 
     def __init__(self, app_config, wifi=None, time_service=None,
-                 sensor_manager=None, clock=None, sleep=None, interval_s=None,
+                 sensor_manager=None, dashboard=None, clock=None, sleep=None,
+                 interval_s=None,
                  wifi_retry_interval_s=DEFAULT_WIFI_RETRY_INTERVAL_S,
                  ntp_retry_interval_s=DEFAULT_NTP_RETRY_INTERVAL_S):
         self.config = app_config
@@ -94,6 +105,20 @@ class ClockGpsApp:
         self._ntp_retry_interval_s = ntp_retry_interval_s
         self._next_wifi_retry = None
         self._next_ntp_attempt = None
+        if dashboard is None:
+            dashboard = Dashboard(
+                device_id=app_config.device_id,
+                version=version.__version__,
+                wifi=self._wifi,
+                time_service=self._time,
+                port=app_config.web_port,
+                clock=self._clock,
+                enabled=app_config.web_enabled,
+                refresh_min_interval_s=app_config.web_refresh_min_s,
+                utc_offset_hours=app_config.utc_offset_hours,
+                logger=self._log,
+            )
+        self._dashboard = dashboard
 
     @property
     def interval_s(self):
@@ -102,11 +127,12 @@ class ClockGpsApp:
 
     # -- lifecycle ------------------------------------------------------
     def setup(self):
-        """Connect, synchronize time, and initialize the sensors.
+        """Connect, synchronize time, initialize sensors, start the dashboard.
 
         Never raises for expected hardware/network problems: sensor
         initialization failures are recorded per sensor by the sensor
-        manager, and Wi-Fi/NTP failures are logged and retried later.
+        manager, Wi-Fi/NTP failures are logged and retried later, and a
+        dashboard that cannot bind is logged and simply left disabled.
         """
         self._log("%s starting (device %s)"
                   % (version.__version__, self.config.device_id))
@@ -115,6 +141,7 @@ class ClockGpsApp:
         for name, status in results.items():
             if status != STATUS_OK:
                 self._log("sensor %s unavailable: %s" % (name, status))
+        self._dashboard.start()
         return results
 
     def run(self):
@@ -125,8 +152,9 @@ class ClockGpsApp:
                       % self._interval_s)
             while True:
                 self.run_once()
-                self._sleep(self._interval_s)
+                self._wait(self._interval_s)
         except KeyboardInterrupt:
+            self._dashboard.stop()
             self._log("stopped")
         return 0
 
@@ -134,6 +162,7 @@ class ClockGpsApp:
         """Maintain connections, read every sensor, and report each result."""
         self._maintain_connections(self._clock())
         records = self._manager.read_all()
+        self._dashboard.update(records)
         for record in records:
             self._report(record)
         return records
@@ -171,17 +200,47 @@ class ClockGpsApp:
 
     # -- reporting ------------------------------------------------------
     def _report(self, record):
+        stamp = format_timestamp(record.get("timestamp"),
+                                 offset_hours=self.config.utc_offset_hours)
+        stamp = stamp or TIME_NOT_SET
         name = record.get("sensor")
         status = record.get("status")
         value = record.get("value")
         if (name == WEATHER_SENSOR_NAME and status == STATUS_OK
                 and isinstance(value, dict)):
-            self._log(format_reading(value))
+            self._log("%s | %s" % (stamp, format_reading(value)))
         elif status == STATUS_OK:
-            self._log("%s: %s" % (name, value))
+            self._log("%s | %s: %s" % (stamp, name, value))
         else:
-            self._log("%s unavailable: %s"
-                      % (name, record.get("error", status)))
+            self._log("%s | %s unavailable: %s"
+                      % (stamp, name, record.get("error", status)))
+
+    def _wait(self, seconds):
+        """Wait *seconds*, serving dashboard requests while the dashboard is up.
+
+        When the dashboard is disabled or failed to start, this is exactly the
+        previous plain ``sleep``. Otherwise requests are served during the wait
+        and the reading schedule is anchored to the *last actual reading*: a
+        client's refresh request is queued here (never handled inside the HTTP
+        handler), the app takes one reading through the normal path, and the
+        interval restarts from that reading.
+        """
+        if not self._dashboard.enabled:
+            self._sleep(seconds)
+            return
+        deadline = self._clock() + seconds
+        while True:
+            if self._dashboard.service_until(deadline):
+                self.run_once()
+                deadline = self._clock() + seconds
+                continue
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                return
+            # The dashboard stopped serving before the deadline (for example a
+            # socket error); fall back to sleeping so the schedule is kept.
+            self._sleep(remaining)
+            return
 
     def _log(self, message):
         print("[clock-gps] " + message)

@@ -153,5 +153,49 @@ class WeatherConfigTests(unittest.TestCase):
         self.assertTrue(any("pressure_trend_window_s" in p for p in problems))
 
 
+class WebConfigTests(unittest.TestCase):
+    def test_web_defaults_are_valid(self):
+        app_config = config.Config()
+        self.assertTrue(app_config.web_enabled)
+        self.assertEqual(80, app_config.web_port)
+        self.assertEqual(10, app_config.web_refresh_min_s)
+        self.assertEqual([], app_config.validate())
+
+    def test_dashboard_can_be_disabled(self):
+        self.assertEqual([], config.Config(web_enabled=False).validate())
+
+    def test_non_bool_web_enabled_is_reported(self):
+        problems = config.Config(web_enabled="yes").validate()
+        self.assertTrue(any("web_enabled" in p for p in problems))
+
+    def test_invalid_web_port_is_reported(self):
+        for port in (0, 70000, "http"):
+            problems = config.Config(web_port=port).validate()
+            self.assertTrue(any("web_port" in p for p in problems), port)
+
+    def test_too_small_refresh_interval_is_reported(self):
+        problems = config.Config(web_refresh_min_s=1).validate()
+        self.assertTrue(any("web_refresh_min_s" in p for p in problems))
+
+
+class UtcOffsetConfigTests(unittest.TestCase):
+    def test_default_is_eastern_standard(self):
+        app_config = config.Config()
+        self.assertEqual(-5, app_config.utc_offset_hours)
+        self.assertEqual([], app_config.validate())
+
+    def test_fractional_offset_is_allowed(self):
+        self.assertEqual([], config.Config(utc_offset_hours=5.5).validate())
+
+    def test_out_of_range_offset_is_reported(self):
+        for value in (-13, 15):
+            problems = config.Config(utc_offset_hours=value).validate()
+            self.assertTrue(any("utc_offset_hours" in p for p in problems), value)
+
+    def test_non_numeric_offset_is_reported(self):
+        problems = config.Config(utc_offset_hours="east").validate()
+        self.assertTrue(any("utc_offset_hours" in p for p in problems))
+
+
 if __name__ == "__main__":
     unittest.main()

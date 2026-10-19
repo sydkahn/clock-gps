@@ -25,8 +25,9 @@ Where this README and the specification disagree, the specification wins.
   pressure, and humidity module is implemented and unit-tested on the host,
   and is now wired into `main.py`: the device loads configuration, connects
   Wi-Fi, synchronizes time, and reads and reports the weather on a configurable
-  interval. The estimated sea-level pressure has still not been validated
-  against an independent weather observation.
+  interval. A read-only web dashboard presents the pressure trend and current
+  readings on the local network. The estimated sea-level pressure has still not
+  been validated against an independent weather observation.
 
 Implemented so far:
 
@@ -45,6 +46,11 @@ Implemented so far:
   `device/sensors/weather.py`) reporting temperature in °F, relative humidity,
   station pressure in hPa and inHg, an estimated sea-level pressure, and a
   ~3-hour pressure trend, with small pressure-history persistence.
+- A read-only local web dashboard (`device/connectivity/dashboard.py`) that
+  shows the pressure trend, temperature in °F, humidity, the last reading
+  time, and Wi-Fi/sensor status, with a JSON status endpoint and a rate-limited
+  "refresh now" request. It serves requests from the main loop, never reads a
+  sensor itself, and shows no absolute pressure and no credentials.
 - A modular sensor interface and failure-isolating manager
   (`device/sensors/`).
 - Import-safe placeholder modules for later phases (power, updates, MQTT).
@@ -69,7 +75,7 @@ clock-gps/
 │   ├── version.py
 │   ├── credentials.example.py
 │   ├── clock/time_service.py
-│   ├── connectivity/       # wifi.py (implemented); mqtt_client.py (placeholder)
+│   ├── connectivity/       # wifi.py, dashboard.py; mqtt_client.py (placeholder)
 │   ├── sensors/            # base.py, manager.py, bme280.py, weather.py
 │   ├── power/              # power_manager.py (placeholder)
 │   └── updates/            # ota.py (placeholder)
@@ -131,7 +137,11 @@ only and cover:
   history persistence and corruption, error handling, and `SensorManager`
   compatibility (`tests/test_weather.py`);
 - the `main.py` startup and reading loop, failure isolation, retry pacing,
-  trend reporting, and Ctrl-C shutdown (`tests/test_main.py`);
+  trend reporting, dashboard wiring, timestamped readings, and Ctrl-C
+  shutdown (`tests/test_main.py`);
+- the read-only web dashboard: request parsing/routing, response formatting,
+  the pressure-free JSON whitelist, the reading timestamp, and the cooperative
+  serving loop (`tests/test_dashboard.py`);
 - sensor failure isolation (`tests/test_sensor_manager.py`);
 - that real credentials stay ignored by Git (`tests/test_gitignore.py`).
 
@@ -142,7 +152,12 @@ Non-secret settings live in `device/config.py` (`Config`): `device_id`,
 weather settings `elevation_ft` (ground elevation above sea level, default
 `627` feet), `pressure_trend_window_s` (trend window, default `10800` seconds,
 about three hours), and `pressure_trend_threshold_hpa` (trend threshold,
-default `1.0` hPa). Secrets (Wi-Fi and, later, MQTT) come from the git-ignored
+default `1.0` hPa), plus the dashboard settings `web_enabled` (default
+`True`), `web_port` (default `80`), and `web_refresh_min_s` (minimum seconds
+between accepted manual refreshes, default `10`), and `utc_offset_hours` (the
+display-only local UTC offset in hours, default `-5` for Eastern Standard
+Time). Secrets (Wi-Fi and, later,
+MQTT) come from the git-ignored
 `device/credentials.py`, loaded through `config.load()`. `config.load()`
 raises `ConfigurationError` with a secret-free message when credentials are
 missing or invalid.
@@ -205,17 +220,54 @@ versioned JSON file, with writes rate-limited to spare the flash.
 configuration and credentials, connects Wi-Fi, synchronizes time over NTP,
 initializes the BME280 (SDA GPIO 16, SCL GPIO 17, address `0x76`), and then
 prints one weather line per `telemetry_interval_s` (default `300` seconds).
-For example:
+Each line is prefixed with the reading's local time (12-hour, with AM/PM)
+computed from the NTP-synchronized UTC clock and the configured
+`utc_offset_hours`; if the clock is not synchronized the prefix is `TIME NOT
+SET` rather than a guessed time. For example:
 
 ```text
-[clock-gps] temp 68.0 F | humidity 50.0 % | station 29.235 inHg | sea-level 29.892 inHg (estimated) | trend waiting_for_history
+[clock-gps] 2026-10-18 02:03:12 PM | temp 68.0 F | humidity 50.0 % | station 29.235 inHg | sea-level 29.892 inHg (estimated) | trend waiting_for_history
 ```
+
+Stored and published timestamps remain Unix-epoch seconds in UTC; only the
+displayed time is shifted by `utc_offset_hours`. The offset is fixed, so it
+does not follow daylight saving and must be changed by hand when the local DST
+rule changes.
 
 A failed sensor read, an unavailable Wi-Fi network, or a failed NTP sync is
 reported and retried later rather than stopping the loop, and neither Wi-Fi
 reconnection nor NTP synchronization runs as a busy loop (Wi-Fi retries and
 NTP failures back off; a successful NTP sync is not repeated before
 `ntp_interval_s`). Pressing Ctrl-C in Thonny stops the loop cleanly.
+
+### Web dashboard
+
+When `web_enabled` is true the device also serves a small read-only dashboard
+from the same loop (default port `80`, so it opens by browsing the device's IP
+address). It shows the pressure **trend** (`rising`, `falling`, `steady`, or
+`waiting_for_history`) as the prominent element, plus temperature in °F,
+humidity, the time of the last reading, and Wi-Fi and sensor status. Absolute
+pressure is deliberately not shown on the page.
+
+Routes:
+
+- `GET /` — the HTML page;
+- `GET /status.json` — machine-readable status (current server time and the
+  last reading's time are separate fields and are never confused; the reading
+  time is formatted in the same local 12-hour style as the console);
+- `POST /api/refresh` — queues one immediate reading (rate-limited by
+  `web_refresh_min_s`); other methods and paths are rejected;
+- `GET /favicon.ico` — empty `204`.
+
+The dashboard is a presentation interface only. It is handed each reading after
+the sensor loop takes it, never reads a sensor itself, and never triggers a
+second reading path: a refresh request is queued back to the main loop, which
+takes the reading and restarts the interval from it. Requests are served during
+the wait between scheduled readings, so the five-minute schedule is preserved.
+If the dashboard is disabled, or cannot bind its port, the loop falls back to a
+plain sleep and behaves exactly as before. MQTT remains the only
+home-automation interface; the dashboard is LAN-local, is bound to `0.0.0.0`,
+and must not be exposed to the public internet.
 
 ## Safety and secrets
 

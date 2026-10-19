@@ -6,8 +6,9 @@ unit-tested on the development computer. The optional ``ntp_module`` and
 ``time_module`` constructor arguments let tests inject fakes.
 
 Time is stored as whole seconds since the Unix epoch (1970-01-01T00:00:00Z)
-in UTC. Conversion to local/display time is a separate concern and is not
-done here.
+in UTC. Conversion to local/display time is a separate concern; the small
+:func:`format_timestamp` helper exists only for callers that need a
+human-readable local stamp, and returns ``None`` when no time is set.
 
 MicroPython epoch
 -----------------
@@ -55,6 +56,41 @@ def is_plausible(unix_seconds):
     if unix_seconds is None:
         return False
     return int(unix_seconds) >= MIN_PLAUSIBLE_UNIX_S
+
+
+def _to_hour12(hour):
+    """Convert a 0-23 hour to a 1-12 hour for 12-hour display."""
+    hour = hour % 12
+    return 12 if hour == 0 else hour
+
+
+def format_timestamp(unix_seconds, offset_hours=0, gmtime=None):
+    """Format Unix-epoch seconds as local ``YYYY-MM-DD hh:mm:ss AM/PM``.
+
+    *offset_hours* is the local UTC offset applied for display only; the
+    stored Unix timestamp is never changed. Returns ``None`` when
+    *unix_seconds* is ``None``, so callers can show their own "not set" text
+    instead of inventing a time.
+
+    The calendar is derived with UTC (``time.gmtime``) after shifting by the
+    offset, so the result does not depend on the host or device timezone.
+    *gmtime* is an optional callable taking Unix-epoch seconds and returning a
+    struct_time-like 8-tuple; it exists so tests can inject a fixed instant.
+    """
+    if unix_seconds is None:
+        return None
+    shifted = int(unix_seconds) + int(offset_hours * 3600)
+    if gmtime is None:
+        import time
+        if hasattr(time, "ticks_ms"):  # MicroPython: epoch is 2000-01-01
+            stamp = time.gmtime(unix_to_micropython(shifted))
+        else:
+            stamp = time.gmtime(shifted)
+    else:
+        stamp = gmtime(shifted)
+    return "%04d-%02d-%02d %02d:%02d:%02d %s" % (
+        stamp[0], stamp[1], stamp[2], _to_hour12(stamp[3]), stamp[4],
+        stamp[5], "AM" if stamp[3] < 12 else "PM")
 
 
 def _describe_error(exc):
