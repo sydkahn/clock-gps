@@ -43,6 +43,13 @@ MAX_WEB_PORT = 65535
 
 # Weather sensor defaults.
 DEFAULT_ELEVATION_FT = 627
+# Calibration correction applied only to the estimated sea-level pressure.
+# This matches the device's 30.373 inHg reading to Alexa's 30.000 inHg
+# reference used during calibration; station pressure and trend history are
+# unchanged.
+DEFAULT_PRESSURE_CALIBRATION_OFFSET_INHG = -0.373
+MIN_PRESSURE_CALIBRATION_OFFSET_INHG = -2.0
+MAX_PRESSURE_CALIBRATION_OFFSET_INHG = 2.0
 DEFAULT_PRESSURE_TREND_WINDOW_S = 10800  # approximately three hours
 DEFAULT_PRESSURE_TREND_THRESHOLD_HPA = 1.0
 
@@ -121,6 +128,21 @@ def _check_positive_number(name, value):
         return ["%s must be a number" % name]
     if number != number or number <= 0:  # NaN or non-positive
         return ["%s must be greater than zero" % name]
+    return []
+
+
+def _check_pressure_calibration_offset(value):
+    """Validate the inHg correction for estimated sea-level pressure."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ["pressure_calibration_offset_inhg must be a number"]
+    if (number != number
+            or not (MIN_PRESSURE_CALIBRATION_OFFSET_INHG <= number
+                    <= MAX_PRESSURE_CALIBRATION_OFFSET_INHG)):
+        return ["pressure_calibration_offset_inhg must be between %.1f and %.1f inHg"
+                % (MIN_PRESSURE_CALIBRATION_OFFSET_INHG,
+                   MAX_PRESSURE_CALIBRATION_OFFSET_INHG)]
     return []
 
 
@@ -235,6 +257,7 @@ class Config:
                  telemetry_interval_s=DEFAULT_TELEMETRY_INTERVAL_S,
                  log_level=DEFAULT_LOG_LEVEL,
                  elevation_ft=DEFAULT_ELEVATION_FT,
+                 pressure_calibration_offset_inhg=DEFAULT_PRESSURE_CALIBRATION_OFFSET_INHG,
                  pressure_trend_window_s=DEFAULT_PRESSURE_TREND_WINDOW_S,
                  pressure_trend_threshold_hpa=DEFAULT_PRESSURE_TREND_THRESHOLD_HPA,
                  web_enabled=DEFAULT_WEB_ENABLED,
@@ -250,6 +273,7 @@ class Config:
         self.log_level = log_level
         # Weather / sea-level settings (ground elevation in feet).
         self.elevation_ft = elevation_ft
+        self.pressure_calibration_offset_inhg = pressure_calibration_offset_inhg
         self.pressure_trend_window_s = pressure_trend_window_s
         self.pressure_trend_threshold_hpa = pressure_trend_threshold_hpa
         # Read-only web dashboard settings.
@@ -275,6 +299,8 @@ class Config:
         problems.extend(_check_interval("ntp_timeout_s", self.ntp_timeout_s))
         problems.extend(_check_interval("telemetry_interval_s", self.telemetry_interval_s))
         problems.extend(_check_elevation_ft(self.elevation_ft))
+        problems.extend(_check_pressure_calibration_offset(
+            self.pressure_calibration_offset_inhg))
         problems.extend(_check_trend_window(self.pressure_trend_window_s))
         problems.extend(_check_positive_number("pressure_trend_threshold_hpa",
                                                self.pressure_trend_threshold_hpa))

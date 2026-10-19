@@ -12,10 +12,10 @@ phased plan in `SPECIFICATION.md`.
   stays host-testable). It serves a single self-contained page (`GET /`), a
   JSON status endpoint (`GET /status.json`), a rate-limited refresh request
   (`POST /api/refresh`), and an empty `204` for `GET /favicon.ico`; anything
-  else is a `400`/`404`/`405`. The page shows the pressure **trend** as the
-  prominent element, temperature in °F, humidity, the last reading time, and
-  Wi-Fi/sensor status. Absolute pressure is excluded from both the page and the
-  JSON by a field whitelist, and no credentials are exposed.
+  else is a `400`/`404`/`405`. Temperature and humidity are the prominent
+  readings, followed by estimated sea-level pressure and trend (arrow after
+  trend text), reading time, and Wi-Fi/sensor status. Pressure is included in
+  JSON through a field whitelist; no credentials are exposed.
 - `device/clock/time_service.py`: `format_timestamp`, a small, injectable
   helper that formats Unix-epoch seconds as a local 12-hour
   `YYYY-MM-DD hh:mm:ss AM/PM` string, applying a display-only UTC offset and
@@ -24,8 +24,12 @@ phased plan in `SPECIFICATION.md`.
   `web_port` (default `80`), `web_refresh_min_s` (default `10`), and
   `utc_offset_hours` (display-only local UTC offset in hours, default `-5` for
   Eastern Standard Time), with validation and backward-compatible defaults.
+- Weather configuration now applies `pressure_calibration_offset_inhg` only to
+  estimated sea-level pressure (default `-0.373` inHg, based on the device's
+  30.373 inHg and Alexa's 30.000 inHg comparison); station pressure and trend
+  history are unchanged.
 - Tests: `tests/test_dashboard.py` (request parsing/routing, response
-  formatting, the pressure-free JSON whitelist, the reading timestamp, and the
+  formatting, the whitelisted pressure fields, the reading timestamp, and the
   cooperative serving loop with fakes); `tests/test_time_service.py` extended
   for `format_timestamp` (morning, afternoon, noon, midnight, and UTC-to-local
   conversion); `tests/test_config.py` extended for the web and offset settings;

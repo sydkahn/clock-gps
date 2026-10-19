@@ -177,21 +177,22 @@ class PayloadTests(unittest.TestCase):
         self.assertEqual(NOW - 10, payload["last_reading"])
         self.assertEqual(68.0, payload["weather"]["temperature_f"])
         self.assertEqual(50.0, payload["weather"]["humidity_pct"])
+        self.assertEqual(29.892, payload["weather"]["pressure_sea_level_inhg"])
         self.assertEqual("rising", payload["weather"]["trend"])
         self.assertEqual(2.5, payload["weather"]["trend_delta_hpa"])
         self.assertTrue(payload["wifi"]["connected"])
         self.assertEqual("10.0.0.203", payload["wifi"]["ip"])
         self.assertEqual(STATUS_OK, payload["sensor"]["status"])
 
-    def test_weather_fields_are_whitelisted(self):
+    def test_weather_fields_are_whitelisted_with_sea_level_pressure(self):
         payload = dashboard.build_status_payload(
             records=[weather_record()], wifi_status=FakeWifi().status(),
             now=NOW, device_id="d", version="v")
         self.assertEqual(
-            {"temperature_f", "humidity_pct", "trend", "trend_delta_hpa"},
+            {"temperature_f", "humidity_pct", "pressure_sea_level_inhg",
+             "trend", "trend_delta_hpa"},
             set(payload["weather"].keys()))
-        # The strongest guarantee: no absolute pressure reaches the payload.
-        self.assertNotIn("pressure", json.dumps(payload))
+        self.assertNotIn("pressure_station", json.dumps(payload))
 
     def test_handles_missing_sensor(self):
         payload = dashboard.build_status_payload(
@@ -324,7 +325,7 @@ class ResponseFormatTests(unittest.TestCase):
 
 
 class HandlerTests(unittest.TestCase):
-    def test_serves_index_without_absolute_pressure(self):
+    def test_serves_index_with_estimated_pressure(self):
         conn = FakeConn(b"GET / HTTP/1.1\r\n\r\n")
         make_dashboard()._handle(conn)
         head, body = response_parts(conn.written)
@@ -332,12 +333,13 @@ class HandlerTests(unittest.TestCase):
         self.assertIn(b"text/html", head)
         text = body.decode("utf-8")
         self.assertIn("pressure trend", text.lower())
+        self.assertIn("Sea-level pressure (estimated)", text)
+        self.assertIn('id="pressure"', text)
         self.assertIn("Refresh now", text)
         self.assertIn("/status.json", text)
         self.assertIn("temperature_f", text)
         self.assertIn("Last reading", text)
         self.assertNotIn("pressure_station", text)
-        self.assertNotIn("pressure_sea_level", text)
 
     def test_serves_status_json(self):
         dash = make_dashboard()
@@ -349,9 +351,10 @@ class HandlerTests(unittest.TestCase):
         payload = json.loads(body.decode("utf-8"))
         self.assertEqual("rising", payload["weather"]["trend"])
         self.assertEqual(68.0, payload["weather"]["temperature_f"])
+        self.assertEqual(29.892, payload["weather"]["pressure_sea_level_inhg"])
         self.assertEqual(1700000000, payload["last_reading"])
         self.assertEqual("2023-11-14 10:13:20 PM", payload["last_reading_local"])
-        self.assertNotIn("pressure", body.decode("utf-8"))
+        self.assertNotIn("pressure_station", body.decode("utf-8"))
 
     def test_favicon_returns_no_content(self):
         conn = FakeConn(b"GET /favicon.ico HTTP/1.1\r\n\r\n")

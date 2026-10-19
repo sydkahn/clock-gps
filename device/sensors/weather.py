@@ -35,6 +35,8 @@ from sensors.bme280 import (BME280, DEFAULT_ADDRESS, DEFAULT_SDA_PIN,
 # Captured at import so it is available even though ``config`` is later used
 # as a constructor parameter name (which shadows the module inside methods).
 _DEFAULT_ELEVATION_FT = config.DEFAULT_ELEVATION_FT
+_DEFAULT_PRESSURE_CALIBRATION_OFFSET_INHG = (
+    config.DEFAULT_PRESSURE_CALIBRATION_OFFSET_INHG)
 
 # --- Physical constants ---------------------------------------------------
 FT_TO_M = 0.3048
@@ -303,6 +305,9 @@ class WeatherSensor(Sensor):
 
         self._elevation_ft = getattr(config, "elevation_ft",
                                      _DEFAULT_ELEVATION_FT)
+        self._pressure_calibration_offset_inhg = getattr(
+            config, "pressure_calibration_offset_inhg",
+            _DEFAULT_PRESSURE_CALIBRATION_OFFSET_INHG)
         window_s = getattr(config, "pressure_trend_window_s",
                            DEFAULT_TREND_WINDOW_S)
         threshold_hpa = getattr(config, "pressure_trend_threshold_hpa",
@@ -395,6 +400,11 @@ class WeatherSensor(Sensor):
                 pressure_hpa, temperature_c, elevation_m)
         except ValueError:
             raise SensorError("could not estimate sea-level pressure")
+        # This field-based correction aligns the estimated sea-level value to
+        # a local reference. It does not change measured station pressure or
+        # the pressure-trend history, which is based on station pressure.
+        sea_level_hpa += (self._pressure_calibration_offset_inhg
+                          * HPA_PER_INHG)
 
         return {
             "temperature_f": round(celsius_to_fahrenheit(temperature_c), 1),

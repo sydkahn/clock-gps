@@ -287,6 +287,29 @@ class WeatherSensorTests(unittest.TestCase):
         self.assertNotEqual(reading["pressure_station_hpa"],
                             reading["pressure_sea_level_hpa"])
 
+    def test_calibration_offset_only_adjusts_sea_level_pressure(self):
+        raw = FakeDriver(pressure_pa=99000.0)
+        uncalibrated = self.make_sensor(
+            raw, config_obj=config.Config(
+                elevation_ft=627, pressure_calibration_offset_inhg=0.0))
+        uncalibrated.initialize()
+        base = uncalibrated.read()
+
+        calibrated = self.make_sensor(
+            raw, config_obj=config.Config(
+                elevation_ft=627,
+                pressure_calibration_offset_inhg=-0.373))
+        calibrated.initialize()
+        corrected = calibrated.read()
+
+        self.assertEqual(base["pressure_station_hpa"],
+                         corrected["pressure_station_hpa"])
+        self.assertEqual(base["pressure_station_inhg"],
+                         corrected["pressure_station_inhg"])
+        self.assertAlmostEqual(-0.373,
+                               corrected["pressure_sea_level_inhg"]
+                               - base["pressure_sea_level_inhg"], places=3)
+
     def test_reading_status_is_ok_when_initialized(self):
         sensor = self.make_sensor(FakeDriver())
         self.assertEqual(STATUS_UNAVAILABLE, sensor.status())

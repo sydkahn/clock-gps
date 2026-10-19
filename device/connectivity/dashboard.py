@@ -9,9 +9,8 @@ interface only:
   it can never block on I2C or race the sensor.
 - It exposes no credentials and no control beyond a rate-limited "refresh now"
   request.
-- Pressure is reported only as a trend (direction, plus the change over the
-  window as supporting detail). Absolute pressure values are deliberately
-  excluded from both the page and the JSON payload by whitelisting fields.
+- Pressure is shown as an estimated sea-level value and as a trend. The
+  absolute pressure field is explicitly whitelisted in the JSON payload.
 
 MQTT remains the only home-automation interface; this module does not talk to
 Home Assistant, Node-RED, Alexa, or any external service.
@@ -77,8 +76,9 @@ ROUTE_NOT_FOUND = "not_found"
 ROUTE_METHOD_NOT_ALLOWED = "method_not_allowed"
 
 # The page is a single self-contained document: no external CSS, fonts, or
-# scripts. The pressure trend is the prominent element; absolute pressure
-# values are never shown. The browser binds these elements to /status.json.
+# scripts. Temperature and humidity lead, followed by compact estimated
+# sea-level pressure and its trend. The browser binds these elements to
+# /status.json.
 INDEX_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -92,15 +92,18 @@ body{margin:0;padding:20px;background:#0f172a;color:#e2e8f0;font-family:system-u
 main{width:100%;max-width:440px}
 h1{font-size:1.05rem;font-weight:600;margin:0;color:#94a3b8}
 .sub{font-size:.8rem;color:#64748b;margin:4px 0 16px}
-.card{background:#1e293b;border-radius:12px;padding:18px;margin-bottom:14px}
-.trend{text-align:center;padding:24px 12px}
-.arrow{font-size:2.8rem;line-height:1;display:block}
-.word{font-size:1.35rem;font-weight:700;letter-spacing:.05em;display:block;margin-top:8px}
-.delta{font-size:.85rem;color:#94a3b8;margin-top:8px;min-height:1em}
+.card{background:#1e293b;border-radius:12px;padding:14px;margin-bottom:12px}
+.primary .value{font-size:1.65rem}
+.pressure-line{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-top:5px}
+.pressure{font-size:1.35rem;font-weight:650}
+.trend-text{font-size:.85rem;color:#94a3b8;white-space:nowrap}
+.arrow{font-size:1rem;font-weight:700;margin-left:4px}
+.word{font-weight:700;letter-spacing:.03em}
+.delta{font-size:.75rem;color:#94a3b8;margin-top:5px;min-height:1em}
 .rising{color:#f87171}.falling{color:#60a5fa}.steady{color:#4ade80}.waiting{color:#94a3b8}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .label{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8}
-.value{font-size:1.5rem;font-weight:700;margin-top:6px}
+.value{font-size:1.3rem;font-weight:700;margin-top:6px}
 .row{display:flex;justify-content:space-between;font-size:.9rem;padding:5px 0}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;background:#64748b;vertical-align:middle}
 .ok{background:#4ade80}.bad{background:#f87171}
@@ -113,15 +116,17 @@ button:disabled{opacity:.6}
 <main>
 <h1 id="dev">Clock GPS</h1>
 <div class="sub">Last reading: <span id="when">-</span> <span id="age"></span></div>
-<div class="card trend">
-<div class="label">Pressure trend</div>
-<span class="arrow" id="arrow">&#8226;</span>
-<span class="word" id="word">WAITING FOR HISTORY</span>
-<div class="delta" id="delta"></div>
-</div>
-<div class="grid">
+<div class="grid primary">
 <div class="card"><div class="label">Temperature</div><div class="value" id="temp">-</div></div>
 <div class="card"><div class="label">Humidity</div><div class="value" id="hum">-</div></div>
+</div>
+<div class="card">
+<div class="label">Sea-level pressure (estimated)</div>
+<div class="value pressure" id="pressure">-</div>
+<div class="pressure-line">
+<span class="trend-text">Pressure trend: <span class="word" id="word">WAITING FOR HISTORY</span><span class="arrow" id="arrow">&#8226;</span></span>
+</div>
+<div class="delta" id="delta"></div>
 </div>
 <div class="card">
 <div class="row"><span><span class="dot" id="wdot"></span>Wi-Fi</span><span id="wtxt">-</span></div>
@@ -139,6 +144,7 @@ var w=d.weather||{};
 txt("dev",d.device_id||"Clock GPS");
 txt("when",d.last_reading_local||"TIME NOT SET");
 txt("age",(d.age_s===null||d.age_s===undefined)?"":"("+ageStr(d.age_s)+")");
+txt("pressure",(w.pressure_sea_level_inhg===null||w.pressure_sea_level_inhg===undefined)?"-":w.pressure_sea_level_inhg.toFixed(2)+" inHg");
 var t=TREND[w.trend]||TREND.waiting_for_history;
 txt("arrow",t[0]);
 txt("word",t[1]);
@@ -176,14 +182,11 @@ def _latest_weather_record(records):
 
 
 def _weather_view(value):
-    """Return the dashboard's whitelisted view of a weather reading.
-
-    The whitelist is the enforcement point for "no absolute pressure": only
-    these fields may reach the page or the JSON payload.
-    """
+    """Return the dashboard's whitelisted view of a weather reading."""
     return {
         "temperature_f": value.get("temperature_f"),
         "humidity_pct": value.get("humidity_pct"),
+        "pressure_sea_level_inhg": value.get("pressure_sea_level_inhg"),
         "trend": value.get("pressure_trend"),
         "trend_delta_hpa": value.get("pressure_trend_delta_hpa"),
     }

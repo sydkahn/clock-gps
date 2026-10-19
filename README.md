@@ -50,7 +50,7 @@ Implemented so far:
   shows the pressure trend, temperature in °F, humidity, the last reading
   time, and Wi-Fi/sensor status, with a JSON status endpoint and a rate-limited
   "refresh now" request. It serves requests from the main loop, never reads a
-  sensor itself, and shows no absolute pressure and no credentials.
+  sensor itself, shows estimated sea-level pressure and no credentials.
 - A modular sensor interface and failure-isolating manager
   (`device/sensors/`).
 - Import-safe placeholder modules for later phases (power, updates, MQTT).
@@ -140,7 +140,7 @@ only and cover:
   trend reporting, dashboard wiring, timestamped readings, and Ctrl-C
   shutdown (`tests/test_main.py`);
 - the read-only web dashboard: request parsing/routing, response formatting,
-  the pressure-free JSON whitelist, the reading timestamp, and the cooperative
+  the pressure-field JSON whitelist, the reading timestamp, and the cooperative
   serving loop (`tests/test_dashboard.py`);
 - sensor failure isolation (`tests/test_sensor_manager.py`);
 - that real credentials stay ignored by Git (`tests/test_gitignore.py`).
@@ -150,9 +150,11 @@ only and cover:
 Non-secret settings live in `device/config.py` (`Config`): `device_id`,
 `ntp_host`, `ntp_interval_s`, `ntp_timeout_s`, `telemetry_interval_s`, and the
 weather settings `elevation_ft` (ground elevation above sea level, default
-`627` feet), `pressure_trend_window_s` (trend window, default `10800` seconds,
-about three hours), and `pressure_trend_threshold_hpa` (trend threshold,
-default `1.0` hPa), plus the dashboard settings `web_enabled` (default
+`627` feet), `pressure_calibration_offset_inhg` (correction applied only to
+estimated sea-level pressure, default `-0.373` inHg from the Alexa comparison),
+`pressure_trend_window_s` (trend window, default `10800` seconds, about three
+hours), and `pressure_trend_threshold_hpa` (trend threshold, default `1.0`
+hPa), plus the dashboard settings `web_enabled` (default
 `True`), `web_port` (default `80`), and `web_refresh_min_s` (minimum seconds
 between accepted manual refreshes, default `10`), and `utc_offset_hours` (the
 display-only local UTC offset in hours, default `-5` for Eastern Standard
@@ -199,11 +201,12 @@ The BME280 module reports a single reading dict with documented units:
 Station pressure and sea-level pressure are always reported separately and are
 never substituted for one another.
 
-> **The sea-level value is an unvalidated estimate.** It is derived from the
-> station pressure, the station temperature, and the configured elevation
-> using the standard barometric reduction. It has **not** been checked against
-> an independent weather observation, so treat it as approximate until that
-> comparison is done.
+> **The sea-level value is an estimate.** It is derived from station pressure,
+> station temperature, and configured elevation using the standard barometric
+> reduction, then adjusted by `pressure_calibration_offset_inhg` (default
+> `-0.373` inHg) to match the Alexa 30.000 inHg reference used for this setup.
+> This is a single-reference correction, not a precision calibration; treat the
+> result as approximate.
 
 The trend compares station pressure over approximately three hours (rounded to
 the sample nearest the window, within a small tolerance). A rise of at least
@@ -244,10 +247,10 @@ NTP failures back off; a successful NTP sync is not repeated before
 
 When `web_enabled` is true the device also serves a small read-only dashboard
 from the same loop (default port `80`, so it opens by browsing the device's IP
-address). It shows the pressure **trend** (`rising`, `falling`, `steady`, or
-`waiting_for_history`) as the prominent element, plus temperature in °F,
-humidity, the time of the last reading, and Wi-Fi and sensor status. Absolute
-pressure is deliberately not shown on the page.
+address). Temperature and humidity are the prominent readings, followed by
+estimated sea-level pressure in inHg and its trend (`rising`, `falling`,
+`steady`, or `waiting_for_history`), with the direction arrow after the trend
+text. It also shows the time of the last reading, Wi-Fi, and sensor status.
 
 Routes:
 

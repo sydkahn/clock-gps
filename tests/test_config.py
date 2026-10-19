@@ -131,6 +131,7 @@ class WeatherConfigTests(unittest.TestCase):
         self.assertEqual(627, app_config.elevation_ft)
         self.assertEqual(10800, app_config.pressure_trend_window_s)
         self.assertEqual(1.0, app_config.pressure_trend_threshold_hpa)
+        self.assertEqual(-0.373, app_config.pressure_calibration_offset_inhg)
         self.assertEqual([], app_config.validate())
 
     def test_elevation_out_of_range_is_reported(self):
@@ -143,6 +144,15 @@ class WeatherConfigTests(unittest.TestCase):
 
     def test_below_sea_level_elevation_is_allowed(self):
         self.assertEqual([], config.Config(elevation_ft=-200).validate())
+
+    def test_pressure_calibration_offset_is_bounded(self):
+        self.assertEqual([], config.Config(
+            pressure_calibration_offset_inhg=-0.373).validate())
+        for value in (-2.1, 2.1, "invalid"):
+            problems = config.Config(
+                pressure_calibration_offset_inhg=value).validate()
+            self.assertTrue(any("pressure_calibration_offset_inhg" in p
+                                for p in problems), value)
 
     def test_non_positive_threshold_is_reported(self):
         problems = config.Config(pressure_trend_threshold_hpa=0).validate()
